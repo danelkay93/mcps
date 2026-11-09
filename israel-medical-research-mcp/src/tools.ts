@@ -3,13 +3,6 @@ import { pubmedSearch, pubmedSummary } from "./client.js";
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
-interface ESearchResult {
-  esearchresult?: {
-    idlist?: string[];
-    count?: string;
-  };
-}
-
 interface AuthorEntry {
   name?: string;
 }
@@ -27,10 +20,23 @@ interface ArticleSummary {
   elocationid?: string;
 }
 
-interface ESummaryResult {
-  result?: Record<string, unknown> & {
-    uids?: string[];
-  };
+const GEOGRAPHIC_SCOPE = "Text matches for israel[affiliation], not verified Israeli institutional provenance. This can include non-Israeli institutions named Beth Israel and retains genuine collaborations; older affiliation coverage can be incomplete.";
+
+function requireArticle(value: unknown, id: string): ArticleSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`No citation metadata returned for PMID ${id}`);
+  }
+  const record = value as Record<string, unknown>;
+  // Reject explicit errors without depending on one undocumented error shape.
+  if (record.error != null || record.ERROR != null || typeof record.title !== "string" || !record.title.trim()) {
+    throw new Error(`Citation metadata unavailable or invalid for PMID ${id}`);
+  }
+  return record as ArticleSummary;
+}
+
+function doiFromElocation(value?: string): string | null {
+  const candidate = value?.replace(/^doi:\s*/i, "").trim();
+  return candidate && /^10\.\d{4,9}\/\S+$/i.test(candidate) ? candidate : null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -70,30 +76,27 @@ async function searchAndSummarize(
   maxResults: number,
   searchOptions?: { mindate?: string; maxdate?: string; datetype?: string }
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-  const searchResult = (await pubmedSearch(term, maxResults, searchOptions)) as ESearchResult;
-  const ids = searchResult.esearchresult?.idlist ?? [];
+  const { ids, count } = await pubmedSearch(term, maxResults, searchOptions);
+  const metadata = { query: term, geographic_scope: GEOGRAPHIC_SCOPE, total: count, total_available: count !== null, returned: ids.length };
 
   if (ids.length === 0) {
     return {
-      content: [{ type: "text", text: JSON.stringify({ total: 0, papers: [] }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ ...metadata, papers: [] }, null, 2) }],
     };
   }
 
-  const summaryResult = (await pubmedSummary(ids)) as ESummaryResult;
-  const result = summaryResult.result ?? {};
+  const result = await pubmedSummary(ids);
 
   const papers = ids.map((id) => {
-    const article = result[id] as ArticleSummary | undefined;
-    if (!article) {
-      return { pmid: id, title: "Unknown" };
-    }
+    const article = requireArticle(result[id], id);
     return {
       pmid: id,
       title: article.title ?? "Unknown",
       authors: (article.authors ?? []).map((a) => a.name).filter(Boolean),
       journal: article.fulljournalname ?? article.source ?? "Unknown",
       pubdate: article.pubdate ?? "Unknown",
-      doi: article.elocationid ?? null,
+      doi: doiFromElocation(article.elocationid),
+      elocationid: article.elocationid ?? null,
     };
   });
 
@@ -101,7 +104,7 @@ async function searchAndSummarize(
     content: [
       {
         type: "text",
-        text: JSON.stringify({ total: ids.length, papers }, null, 2),
+        text: JSON.stringify({ ...metadata, papers }, null, 2),
       },
     ],
   };
@@ -110,7 +113,7 @@ async function searchAndSummarize(
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
 export const searchPapersSchema = z.object({
-  query: z.string().describe("Search query text, e.g. 'diabetes treatment'"),
+  query: z.string().describe("Title/Abstract field query; multi-word text may be interpreted as a phrase by PubMed"),
   institution: z
     .string()
     .optional()
@@ -132,22 +135,15 @@ export async function searchPapers(
 }
 
 export const getPaperDetailsSchema = z.object({
-  pmid: z.union([z.string(), z.number()]).describe("PubMed ID of the paper"),
+  pmid: z.union([z.string().regex(/^[1-9]\d*$/), z.number().int().positive().safe()]).describe("Positive numeric PubMed ID of the paper"),
 });
 
 export async function getPaperDetails(
   args: z.infer<typeof getPaperDetailsSchema>
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const id = String(args.pmid);
-  const summaryResult = (await pubmedSummary([id])) as ESummaryResult;
-  const result = summaryResult.result ?? {};
-  const article = result[id] as ArticleSummary | undefined;
-
-  if (!article) {
-    return {
-      content: [{ type: "text", text: JSON.stringify({ error: `No paper found for PMID ${id}` }) }],
-    };
-  }
+  const result = await pubmedSummary([id]);
+  const article = requireArticle(result[id], id);
 
   const details = {
     pmid: id,
@@ -158,7 +154,8 @@ export async function getPaperDetails(
     volume: article.volume ?? null,
     issue: article.issue ?? null,
     pages: article.pages ?? null,
-    doi: article.elocationid ?? null,
+    doi: doiFromElocation(article.elocationid),
+    elocationid: article.elocationid ?? null,
     pubmed_url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
   };
 
@@ -236,8 +233,7 @@ export async function countPapers(
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const term = buildIsraelQuery({ query: args.query, institution: args.institution });
 
-  const searchResult = (await pubmedSearch(term, 0, { rettype: "count" })) as ESearchResult;
-  const count = searchResult.esearchresult?.count ?? "0";
+  const { count } = await pubmedSearch(term, 0);
 
   return {
     content: [
@@ -246,7 +242,9 @@ export async function countPapers(
         text: JSON.stringify(
           {
             query: term,
-            total_count: parseInt(count, 10),
+            total_count: count,
+            total_available: count !== null,
+            geographic_scope: GEOGRAPHIC_SCOPE,
           },
           null,
           2

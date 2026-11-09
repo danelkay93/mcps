@@ -3,7 +3,7 @@
 Part of [skills-il](https://github.com/skills-il): browse all Israeli MCP servers at [agentskills.co.il/mcp](https://agentskills.co.il/mcp).
 
 
-MCP server for medical research from Israeli institutions, via the [PubMed E-utilities API](https://www.ncbi.nlm.nih.gov/books/NBK25501/). Every search auto-scopes to `israel[affiliation]`.
+MCP server for medical research searches via the [PubMed E-utilities API](https://www.ncbi.nlm.nih.gov/books/NBK25501/). Every search adds `israel[affiliation]`, a text match rather than verified institutional geography. It can include institutions abroad named Beth Israel. No blanket exclusion is applied, because that would also remove genuine collaborations. Affiliation indexing is less complete in older records.
 
 ## Install
 
@@ -34,11 +34,13 @@ claude mcp add israel-medical-research npx -- -y @skills-il/israel-medical-resea
 
 ## Tools
 
-- `search_papers`: Free-text search across Israeli-affiliated PubMed papers (title + abstract).
-- `search_by_institution`: Filter to a specific Israeli institution (Weizmann, Hadassah, Tel Aviv University, etc.).
+- `search_papers`: PubMed Title/Abstract field search with the affiliation-text filter. Multi-word queries may be interpreted as phrases by PubMed.
+- `search_by_institution`: Add an institution-name affiliation query (Weizmann, Hadassah, Tel Aviv University, etc.); this does not verify institutional identity or country.
 - `get_recent_papers`: Recent papers in a date range, optionally narrowed by topic.
-- `get_paper_details`: Full PubMed metadata for a paper by PMID.
-- `count_papers`: Result-count for a query without fetching summaries.
+- `get_paper_details`: Citation metadata by PMID; abstracts and full text are not returned. DOI is returned only when the electronic-location value has a recognizable DOI format; the original electronic-location value is retained.
+- `count_papers`: Upstream query-match count without fetching summaries, not a geographically verified Israeli-paper count.
+
+Search outputs distinguish upstream total from returned count. Missing totals are `null`/unavailable; malformed envelopes and unavailable citation records are errors. Request admission is serialized at 350 ms spacing within this process; other processes sharing an IP or key need their own coordination.
 
 See `src/tools.ts` for parameter schemas.
 

@@ -20,44 +20,51 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
+function toolFailure(error: unknown) {
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: error instanceof Error ? error.message : "PubMed request failed" }],
+  };
+}
+
 server.tool(
   "search_papers",
-  "Search medical papers from Israeli institutions on PubMed. Returns titles, authors, journals, and PMIDs.",
+  "Search PubMed with israel[affiliation]. This is a text match, not verified Israeli provenance (it can include Beth Israel abroad). Returns citation summaries, upstream total and returned count; multi-word Title/Abstract text may be interpreted as a phrase.",
   searchPapersSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  async (args) => searchPapers(searchPapersSchema.parse(args))
+  async (args) => searchPapers(searchPapersSchema.parse(args)).catch(toolFailure)
 );
 
 server.tool(
   "get_paper_details",
-  "Get detailed information about a specific paper by its PubMed ID (PMID). Returns title, authors, journal, publication date, DOI, and PubMed URL.",
+  "Get citation metadata by PubMed ID (PMID): title, authors, journal, publication date, recognized DOI and PubMed URL. Does not return an abstract or full text.",
   getPaperDetailsSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  async (args) => getPaperDetails(getPaperDetailsSchema.parse(args))
+  async (args) => getPaperDetails(getPaperDetailsSchema.parse(args)).catch(toolFailure)
 );
 
 server.tool(
   "search_by_institution",
-  "Search papers from a specific Israeli research institution. Supports institutions like Hadassah, Sheba, Weizmann, Technion, Tel Aviv University, Hebrew University, etc.",
+  "Search PubMed affiliation text for an institution together with israel[affiliation]. Country and institutional provenance are not independently verified; genuine collaborations are retained.",
   searchByInstitutionSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  async (args) => searchByInstitution(searchByInstitutionSchema.parse(args))
+  async (args) => searchByInstitution(searchByInstitutionSchema.parse(args)).catch(toolFailure)
 );
 
 server.tool(
   "get_recent_papers",
-  "Get the most recent medical papers from Israeli institutions. Filter by topic and date range.",
+  "Get PubMed papers in a publication-date range matching israel[affiliation], optionally filtered by topic. Geographic provenance is unverified; the affiliation text can also match institutions abroad.",
   getRecentPapersSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  async (args) => getRecentPapers(getRecentPapersSchema.parse(args))
+  async (args) => getRecentPapers(getRecentPapersSchema.parse(args)).catch(toolFailure)
 );
 
 server.tool(
   "count_papers",
-  "Count the total number of papers matching search criteria from Israeli institutions on PubMed.",
+  "Count PubMed text-query matches including israel[affiliation]. This is not a verified count of papers from Israeli institutions; missing upstream counts are unavailable.",
   countPapersSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-  async (args) => countPapers(countPapersSchema.parse(args))
+  async (args) => countPapers(countPapersSchema.parse(args)).catch(toolFailure)
 );
 
 async function main(): Promise<void> {
