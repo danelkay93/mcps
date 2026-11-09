@@ -36,13 +36,13 @@ claude mcp add israel-amutot npx -- -y @skills-il/israel-amutot-mcp
 
 - `search_amuta`: Search amutot (Israeli non-profits) by name or registration number.
 - `get_amuta_details`: Get full registry record for an amuta by ID.
-- `count_amutot`: Aggregate counts (total registered, by status, by activity class).
-- `search_by_activity`: Find amutot by activity classification or secondary field.
+- `count_amutot`: Single count matching optional exact filters (status, activity class, city).
+- `search_by_activity`: Find amutot by exact activity classification, optionally filtered by city.
 - `get_financial_info`: Latest financial year data: revenue, expenses, volunteers, employees.
 - `search_foreign_donations`: Foreign donations declared by Israeli amutot.
 - `get_amuta_donation_summary`: Aggregate donation totals for a given amuta.
-- `check_management_certificate`: Whether an amuta currently holds a valid תעודת ניהול תקין.
-- `search_certificates`: Search across management certificate records.
+- `check_management_certificate`: Paginated year-by-year management certificate records from the registry extract; these do not establish current validity or donation tax treatment.
+- `search_certificates`: Search across certificate extract records by year; confirm current status with the Registrar. Source dates are not inferred from retrieval time.
 - `search_public_benefit_company`: Search registered public benefit companies (חלצ).
 - `get_public_benefit_company_details`: Full record for a חלצ by registration number.
 

@@ -117,7 +117,7 @@ server.tool(
 
 server.tool(
   "check_management_certificate",
-  "Check if an Israeli amuta or public benefit company holds a Proper Management Certificate (Ishur Nihul Takin) for a specific year or across all years. The certificate is required for receiving government funding and tax-exempt donations.",
+  "Look up year-by-year Proper Management Certificate (Ishur Nihul Takin) records from the data.gov.il registry extract, with pagination. These records do not establish current validity or donation tax treatment. Extracts may lag; confirm current status with the Registrar.",
   checkManagementCertificateSchema.shape,
   TOOL_HINTS,
   toolHandler(checkManagementCertificateSchema, checkManagementCertificate)
@@ -125,7 +125,7 @@ server.tool(
 
 server.tool(
   "search_certificates",
-  "Search Proper Management Certificate records by year and optional approval status. Filter by year (required), approval status ('נחתם אישור' for approved, 'אין אישור' for not approved), and amuta name. Useful for finding which organizations hold valid certificates.",
+  "Search Proper Management Certificate extract records by year, optional approval-status text and amuta name. Reported approval is for the source record year; it does not establish current certificate validity or donation tax treatment.",
   searchCertificatesSchema.shape,
   TOOL_HINTS,
   toolHandler(searchCertificatesSchema, searchCertificates)

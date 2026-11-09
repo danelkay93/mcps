@@ -147,7 +147,7 @@ export async function searchAmuta(
   args: z.infer<typeof searchAmutaSchema>
 ): Promise<string> {
   if (!args.query && !args.number) {
-    return "Error: Provide either a search query (text) or a registration number.";
+    throw new Error("Provide either a search query (text) or a registration number.");
   }
 
   if (args.number) {
@@ -357,7 +357,7 @@ export async function searchForeignDonations(
   args: z.infer<typeof searchForeignDonationsSchema>
 ): Promise<string> {
   if (!args.query && !args.registration_number && !args.year) {
-    return "Error: Provide at least one filter: query text, registration_number, or year.";
+    throw new Error("Provide at least one filter: query text, registration_number, or year.");
   }
 
   const filters: Record<string, string | number> = {};
@@ -437,7 +437,8 @@ export const checkManagementCertificateSchema = z.object({
     .number()
     .int()
     .optional()
-    .describe("Specific year to check (omit to get all years)"),
+    .describe("Specific year to check (omit for a page across years; this does not establish current validity)"),
+  offset: z.number().int().min(0).default(0).describe("Offset for certificate-record pagination (50 per page)"),
 });
 
 export async function checkManagementCertificate(
@@ -456,15 +457,26 @@ export async function checkManagementCertificate(
     resourceId: RESOURCES.managementCertificate,
     filters,
     limit: 50,
+    offset: args.offset,
     sort: `${CERT_FIELDS.year} desc`,
   });
 
   if (result.result.records.length === 0) {
-    return `No management certificate records found for ${regStr}${args.year ? ` in ${args.year}` : ""}`;
+    return `No management certificate records on this page for ${regStr}${args.year ? ` in ${args.year}` : ""}. Extract absence does not establish current validity or invalidity; verify with the Registrar.`;
   }
 
   const records = result.result.records.map(formatRecord);
-  return JSON.stringify({ total: result.result.total, records }, null, 2);
+  return JSON.stringify({
+    total: result.result.total,
+    returned: records.length,
+    offset: args.offset,
+    has_more: args.offset + records.length < result.result.total,
+    next_offset: args.offset + records.length < result.result.total ? args.offset + records.length : null,
+    current_validity: "not established by these extract records",
+    data_date: "not established; inspect source record year/date fields",
+    note: "Registry extracts may lag. Confirm current certificate status with the Registrar; these records do not establish donation tax treatment.",
+    records,
+  }, null, 2);
 }
 
 export const searchCertificatesSchema = z.object({
@@ -512,7 +524,7 @@ export async function searchCertificates(
     limit: args.limit,
     offset: args.offset,
   });
-  return formatResults(result.result.records, result.result.total);
+  return formatResults(result.result.records, result.result.total) + "\nCertificate extract records do not establish current validity or donation tax treatment. Confirm current status with the Registrar; inspect source record year/date fields.";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -562,7 +574,7 @@ export async function searchPublicBenefitCompany(
   args: z.infer<typeof searchPublicBenefitCompanySchema>
 ): Promise<string> {
   if (!args.query && !args.number && !args.activity_type) {
-    return "Error: Provide at least one filter: query text, number, or activity_type.";
+    throw new Error("Provide at least one filter: query text, number, or activity_type.");
   }
 
   if (args.number) {
