@@ -38,7 +38,7 @@ claude mcp add kolzchut npx -- -y @skills-il/kolzchut-mcp
 - **Article retrieval** with wikitext or plain text output
 - **Section-level reading** for targeted information extraction
 - **Category browsing** to discover rights by topic area
-- **No authentication required** - uses the public MediaWiki API
+- **No authentication configured** - calls the site's MediaWiki API path, whose availability and permission for this use are unverified (see Data Source)
 
 ## Tools
 
@@ -89,7 +89,9 @@ npx @modelcontextprotocol/inspector node dist/index.js
 
 ## Data Source
 
-All data comes from [kolzchut.org.il](https://www.kolzchut.org.il), maintained by the Kolzchut (All-Rights) non-profit organization. Content is licensed under CC BY-SA 3.0.
+All data comes from [kolzchut.org.il](https://www.kolzchut.org.il), maintained by the Kolzchut (All-Rights) non-profit organization. The operator's [llms.txt](https://www.kolzchut.org.il/llms.txt), reviewed on 2026-10-28, states BY-NC-SA 2.5 IL and asks for credit and an article link. That conflicts with this project's former CC BY-SA 3.0 claim; the copyright page could not be verified during that review. Confirm the applicable content licence with the operator before reuse, especially commercial use. Article results include source URLs for attribution. The MIT licence below covers this server's code.
+
+Requests are serialized with at least five seconds between admissions in this process. The operator's [robots.txt](https://www.kolzchut.org.il/robots.txt) and llms.txt restrict automated backend access; whether that covers on-demand agent calls remains an interpretation. The existing `/w/api.php` path has not been validated (the review encountered HTTP 403). Throttling does not establish permission or availability; do not bypass a refusal.
 
 ## License
 

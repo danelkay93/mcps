@@ -6,6 +6,23 @@
 const API_BASE = "https://www.kolzchut.org.il/w/api.php";
 const REQUEST_TIMEOUT = 15_000;
 const CHARACTER_LIMIT = 25_000;
+const MIN_INTERVAL_MS = 5_000;
+let lastRequestTime = 0;
+let admission = Promise.resolve();
+
+function articleUrl(title: string): string {
+  return "https://www.kolzchut.org.il/he/" + encodeURIComponent(title.replace(/ /g, "_"));
+}
+
+function throttle(): Promise<void> {
+  const slot = admission.then(async () => {
+    const wait = MIN_INTERVAL_MS - (Date.now() - lastRequestTime);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestTime = Date.now();
+  });
+  admission = slot.catch(() => {});
+  return slot;
+}
 
 interface MediaWikiSearchResult {
   ns: number;
@@ -62,6 +79,7 @@ interface MediaWikiAllCategoriesResponse {
 }
 
 export interface SearchResult {
+  url: string;
   title: string;
   pageid: number;
   snippet: string;
@@ -80,6 +98,7 @@ export interface SearchOutput {
 }
 
 export interface ArticleOutput {
+  url: string;
   title: string;
   pageid: number;
   content: string;
@@ -94,12 +113,14 @@ export interface SectionInfo {
 }
 
 export interface ArticleSectionsOutput {
+  url: string;
   title: string;
   pageid: number;
   sections: SectionInfo[];
 }
 
 export interface CategoryMember {
+  url: string;
   pageid: number;
   title: string;
 }
@@ -124,6 +145,7 @@ export interface CategoriesOutput {
 }
 
 async function apiFetch<T>(params: Record<string, string>): Promise<T> {
+  await throttle();
   const url = new URL(API_BASE);
   url.searchParams.set("format", "json");
   url.searchParams.set("origin", "*");
@@ -166,6 +188,7 @@ export async function searchRights(
 
   const total = data.query.searchinfo.totalhits;
   const results = data.query.search.map((r) => ({
+    url: articleUrl(r.title),
     title: r.title,
     pageid: r.pageid,
     snippet: stripHtml(r.snippet),
@@ -212,6 +235,7 @@ export async function getArticle(
 
   return {
     title: data.parse.title,
+    url: articleUrl(data.parse.title),
     pageid: data.parse.pageid,
     content,
     ...(truncated ? { truncated: true } : {}),
@@ -229,6 +253,7 @@ export async function getArticleSections(
 
   return {
     title: data.parse.title,
+    url: articleUrl(data.parse.title),
     pageid: data.parse.pageid,
     sections: (data.parse.sections ?? []).map((s) => ({
       index: s.index,
@@ -267,6 +292,7 @@ export async function getArticleSection(
 
   return {
     title: data.parse.title,
+    url: articleUrl(data.parse.title),
     pageid: data.parse.pageid,
     content,
     ...(truncated ? { truncated: true } : {}),
@@ -297,6 +323,7 @@ export async function listCategoryMembers(
 
   const data = await apiFetch<MediaWikiCategoryMembersResponse>(params);
   const members = data.query.categorymembers.map((m) => ({
+    url: articleUrl(m.title),
     pageid: m.pageid,
     title: m.title,
   }));
