@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { searchStudies, getStudyById, type Study, type Location } from "./client.js";
+import { searchStudies, getStudyById, type Study, type Location, type StudyResponse, type DateStruct } from "./client.js";
 
 // ── Formatting helpers ──
 
@@ -11,31 +11,75 @@ function trialLink(nctId: string): string {
   return `https://clinicaltrials.gov/study/${nctId}`;
 }
 
-function formatStudySummary(study: Study): string {
+// Keep the registry's ACTUAL/ESTIMATED marker; an actual date is not an estimate.
+function datedField(struct?: DateStruct): string {
+  if (!struct?.date) return "N/A";
+  return struct.type ? `${struct.date} (${struct.type})` : struct.date;
+}
+
+function israeliSites(study: Study, facility?: string): Location[] {
+  return (study.protocolSection.contactsLocationsModule?.locations ?? []).filter(
+    (loc) => loc.country?.trim().toLowerCase() === "israel" &&
+      (!facility || loc.facility?.toLowerCase().includes(facility.trim().toLowerCase()))
+  );
+}
+
+function siteStatus(loc: Location): string {
+  return loc.status?.trim().toUpperCase() || "UNKNOWN";
+}
+
+function formatStudySummary(study: Study, sites = israeliSites(study)): string {
   const id = study.protocolSection.identificationModule;
   const status = study.protocolSection.statusModule;
   const conditions = study.protocolSection.conditionsModule?.conditions ?? [];
   const sponsor = study.protocolSection.sponsorCollaboratorsModule?.leadSponsor;
   const phases = study.protocolSection.designModule?.phases ?? [];
-  const startDate = status.startDateStruct?.date ?? "N/A";
-  const completionDate =
-    status.primaryCompletionDateStruct?.date ??
-    status.completionDateStruct?.date ??
-    "N/A";
 
   const lines = [
     `## ${id.briefTitle}`,
     "",
     `- **NCT ID**: [${id.nctId}](${trialLink(id.nctId)})`,
-    `- **Status**: ${status.overallStatus}`,
+    `- **Worldwide study status**: ${status.overallStatus}`,
+    `- **Last update posted**: ${status.lastUpdatePostDateStruct?.date ?? "Unknown"}`,
+    `- **Matching Israeli sites**: ${sites.map((loc) => `${loc.facility ?? "Unknown facility"} (${loc.city ?? "Unknown city"}): ${siteStatus(loc)}`).join("; ")}`,
     `- **Conditions**: ${conditions.length > 0 ? conditions.join(", ") : "N/A"}`,
     `- **Phases**: ${phases.length > 0 ? phases.join(", ") : "N/A"}`,
     `- **Sponsor**: ${sponsor ? `${sponsor.name} (${sponsor.class})` : "N/A"}`,
-    `- **Start date**: ${startDate}`,
-    `- **Est. completion**: ${completionDate}`,
+    `- **Start date**: ${datedField(status.startDateStruct)}`,
+    `- **Primary completion**: ${datedField(status.primaryCompletionDateStruct)}`,
+    `- **Study completion**: ${datedField(status.completionDateStruct)}`,
   ];
 
   return lines.join("\n");
+}
+
+function formatSearchPage(data: StudyResponse, title: string, recruitingOnly = false, facility?: string): string {
+  if (!Array.isArray(data.studies)) throw new Error("ClinicalTrials.gov response is missing studies");
+  const eligible: Study[] = [];
+  const unknown: Study[] = [];
+  for (const study of data.studies) {
+    const sites = israeliSites(study, facility);
+    if (!sites.length) continue;
+    if (!recruitingOnly || sites.some((loc) => siteStatus(loc) === "RECRUITING")) eligible.push(study);
+    else if (sites.some((loc) => siteStatus(loc) === "UNKNOWN")) unknown.push(study);
+  }
+  const upstreamCount = typeof data.totalCount === "number" && Number.isSafeInteger(data.totalCount) && data.totalCount >= 0
+    ? data.totalCount : "unavailable";
+  const lines = [
+    `# ${title}`,
+    `Upstream location-term matches (before local site filtering): ${upstreamCount}.`,
+    `Upstream studies on this page: ${data.studies.length}; eligible on page: ${eligible.length}; additional studies with unknown local recruitment status: ${unknown.length}; returned: ${eligible.length + unknown.length}.`,
+    `More upstream pages: ${Boolean(data.nextPageToken)}.`,
+    ...(data.nextPageToken ? [`Next page_token: ${data.nextPageToken} (repeat the same filters).`] : []),
+    "Counts describe this page and upstream candidates, not a total of eligible Israeli trials.",
+  ];
+  if (!eligible.length) lines.push("No eligible studies on this page; this does not establish that no matching trials exist.");
+  for (const study of eligible) lines.push(formatStudySummary(study, israeliSites(study, facility)));
+  if (unknown.length) {
+    lines.push("## Israeli site recruitment status unknown — confirm with the site before relying on availability");
+    for (const study of unknown) lines.push(formatStudySummary(study, israeliSites(study, facility)));
+  }
+  return lines.join("\n\n");
 }
 
 function formatStudyDetails(study: Study): string {
@@ -48,10 +92,7 @@ function formatStudyDetails(study: Study): string {
   const design = ps.designModule;
   const interventions = ps.armsInterventionsModule?.interventions ?? [];
   const sponsor = ps.sponsorCollaboratorsModule;
-  const locations = ps.contactsLocationsModule?.locations ?? [];
-  const israelLocations = locations.filter(
-    (loc) => loc.country?.toLowerCase() === "israel"
-  );
+  const israelLocations = israeliSites(study);
 
   const sections: string[] = [];
 
@@ -63,13 +104,11 @@ function formatStudyDetails(study: Study): string {
     sections.push("");
   }
   sections.push(`**NCT ID**: [${id.nctId}](${trialLink(id.nctId)})`);
-  sections.push(`**Status**: ${status.overallStatus}`);
-  sections.push(
-    `**Start date**: ${status.startDateStruct?.date ?? "N/A"}`
-  );
-  sections.push(
-    `**Est. completion**: ${status.primaryCompletionDateStruct?.date ?? status.completionDateStruct?.date ?? "N/A"}`
-  );
+  sections.push(`**Worldwide study status**: ${status.overallStatus}`);
+  sections.push(`**Last update posted**: ${status.lastUpdatePostDateStruct?.date ?? "Unknown"}`);
+  sections.push(`**Start date**: ${datedField(status.startDateStruct)}`);
+  sections.push(`**Primary completion**: ${datedField(status.primaryCompletionDateStruct)}`);
+  sections.push(`**Study completion**: ${datedField(status.completionDateStruct)}`);
   sections.push("");
 
   // Sponsor
@@ -170,7 +209,7 @@ function formatStudyDetails(study: Study): string {
         ? ` | Contact: ${contact.name ?? ""}${contact.email ? ` (${contact.email})` : ""}${contact.phone ? ` ${contact.phone}` : ""}`
         : "";
       sections.push(
-        `- **${loc.facility ?? "Unknown facility"}**, ${loc.city ?? "Unknown city"}${loc.status ? ` [${loc.status}]` : ""}${contactStr}`
+        `- **${loc.facility ?? "Unknown facility"}**, ${loc.city ?? "Unknown city"} [${siteStatus(loc)}]${contactStr}`
       );
     }
     sections.push("");
@@ -194,7 +233,7 @@ function formatLocations(nctId: string, locations: Location[]): string {
   for (const loc of locations) {
     lines.push(`## ${loc.facility ?? "Unknown facility"}`);
     lines.push(`- **City**: ${loc.city ?? "Unknown"}`);
-    if (loc.status) lines.push(`- **Status**: ${loc.status}`);
+    lines.push(`- **Site status**: ${siteStatus(loc)}`);
     if (loc.contacts && loc.contacts.length > 0) {
       for (const contact of loc.contacts) {
         const parts: string[] = [];
@@ -214,6 +253,7 @@ function formatLocations(nctId: string, locations: Location[]): string {
 // ── Tool schemas ──
 
 export const searchTrialsSchema = z.object({
+  page_token: z.string().optional().describe("Upstream continuation token; keep all search filters unchanged"),
   query: z.string().optional().describe("General search term"),
   condition: z.string().optional().describe("Medical condition (e.g. cancer, diabetes)"),
   intervention: z
@@ -228,14 +268,14 @@ export const searchTrialsSchema = z.object({
       "NOT_YET_RECRUITING",
     ])
     .optional()
-    .describe("Trial status filter"),
+    .describe("Worldwide status filter, except RECRUITING checks matching Israeli sites and separately reports unknown site status"),
   limit: z
     .number()
     .int()
     .min(1)
     .max(50)
     .default(10)
-    .describe("Number of results (default 10, max 50)"),
+    .describe("Upstream page size before local site filtering (default 10, max 50)"),
 });
 
 export const getTrialDetailsSchema = z.object({
@@ -245,8 +285,11 @@ export const getTrialDetailsSchema = z.object({
 });
 
 export const findTrialsByHospitalSchema = z.object({
+  page_token: z.string().optional().describe("Upstream continuation token; keep all search filters unchanged"),
   facility: z
     .string()
+    .trim()
+    .min(1)
     .describe(
       'Hospital or institution name (e.g. "Sheba", "Hadassah", "Ichilov", "Rambam")'
     ),
@@ -258,17 +301,18 @@ export const findTrialsByHospitalSchema = z.object({
       "NOT_YET_RECRUITING",
     ])
     .optional()
-    .describe("Trial status filter"),
+    .describe("Worldwide status filter, except RECRUITING checks the matching Israeli facility and reports unknown site status separately"),
   limit: z
     .number()
     .int()
     .min(1)
     .max(50)
     .default(10)
-    .describe("Number of results (default 10, max 50)"),
+    .describe("Upstream page size before local site filtering (default 10, max 50)"),
 });
 
 export const listRecruitingTrialsSchema = z.object({
+  page_token: z.string().optional().describe("Upstream continuation token; keep all search filters unchanged"),
   condition: z
     .string()
     .optional()
@@ -279,7 +323,7 @@ export const listRecruitingTrialsSchema = z.object({
     .min(1)
     .max(50)
     .default(20)
-    .describe("Number of results (default 20, max 50)"),
+    .describe("Upstream page size before local site filtering (default 20, max 50)"),
 });
 
 export const getTrialLocationsSchema = z.object({
@@ -299,15 +343,9 @@ export async function handleSearchTrials(
     intervention: args.intervention,
     status: args.status,
     limit: args.limit,
+    pageToken: args.page_token,
   });
-
-  if (!data.studies || data.studies.length === 0) {
-    return "No clinical trials found matching your search criteria in Israel.";
-  }
-
-  const header = `# Clinical Trials in Israel (${data.studies.length} result${data.studies.length !== 1 ? "s" : ""})\n`;
-  const results = data.studies.map(formatStudySummary).join("\n\n---\n\n");
-  return header + "\n" + results;
+  return formatSearchPage(data, "Clinical Trials with Listed Israeli Sites", args.status === "RECRUITING");
 }
 
 export async function handleGetTrialDetails(
@@ -324,15 +362,9 @@ export async function handleFindTrialsByHospital(
     facility: args.facility,
     status: args.status,
     limit: args.limit,
+    pageToken: args.page_token,
   });
-
-  if (!data.studies || data.studies.length === 0) {
-    return `No clinical trials found at "${args.facility}" in Israel.`;
-  }
-
-  const header = `# Clinical Trials at ${args.facility}, Israel (${data.studies.length} result${data.studies.length !== 1 ? "s" : ""})\n`;
-  const results = data.studies.map(formatStudySummary).join("\n\n---\n\n");
-  return header + "\n" + results;
+  return formatSearchPage(data, `Clinical Trials at ${args.facility}, Israel`, args.status === "RECRUITING", args.facility);
 }
 
 export async function handleListRecruitingTrials(
@@ -343,28 +375,16 @@ export async function handleListRecruitingTrials(
     status: "RECRUITING",
     limit: args.limit,
     sort: "LastUpdatePostDate:desc",
+    pageToken: args.page_token,
   });
-
-  if (!data.studies || data.studies.length === 0) {
-    const condStr = args.condition ? ` for "${args.condition}"` : "";
-    return `No currently recruiting trials found${condStr} in Israel.`;
-  }
-
   const condStr = args.condition ? ` for "${args.condition}"` : "";
-  const header = `# Currently Recruiting Trials in Israel${condStr} (${data.studies.length} result${data.studies.length !== 1 ? "s" : ""})\n\nSorted by most recently updated.\n`;
-  const results = data.studies.map(formatStudySummary).join("\n\n---\n\n");
-  return header + "\n" + results;
+  return formatSearchPage(data, `Israeli Site Recruitment${condStr} (most recently updated first)`, true);
 }
 
 export async function handleGetTrialLocations(
   args: z.infer<typeof getTrialLocationsSchema>
 ): Promise<string> {
   const study = await getStudyById(args.nct_id);
-  const allLocations =
-    study.protocolSection.contactsLocationsModule?.locations ?? [];
-  const israelLocations = allLocations.filter(
-    (loc) => loc.country?.toLowerCase() === "israel"
-  );
-
-  return formatLocations(args.nct_id, israelLocations);
+  return formatLocations(args.nct_id, israeliSites(study)) +
+    `\nLast update posted: ${study.protocolSection.statusModule.lastUpdatePostDateStruct?.date ?? "Unknown"}.`;
 }

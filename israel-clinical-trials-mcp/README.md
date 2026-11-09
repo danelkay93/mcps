@@ -81,8 +81,10 @@ claude mcp add israel-clinical-trials npx -- -y @skills-il/israel-clinical-trial
 
 ## API
 
-This server uses the [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api), which is free and requires no authentication. All queries are automatically filtered to trials with sites in Israel.
+This server uses the [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api), which is free and requires no authentication. Searches use upstream location terms, then verify that a listed site country is Israel. Hospital searches match the facility on that same Israeli site. RECRUITING requires a matching Israeli site marked RECRUITING; studies with unknown local status appear separately and are not counted as confirmed recruiting. Other status filters refer to worldwide study status. Direct NCT detail lookup can retrieve any trial, including one with no Israeli site.
 
 ## License
 
 MIT
+
+Search tools return one upstream page (limit 50 maximum), then apply local filters. Outputs separate upstream match total, upstream rows on the page, eligible-on-page, unknown local status and returned count. The upstream total is not an Israel-eligible total. Continue with page_token and unchanged filters even if local filtering leaves an empty page. Site statuses, posted update dates, and the ACTUAL/ESTIMATED marker on start, primary-completion and study-completion dates reflect the source record; confirm availability with the site. Admission is serialized at 200 ms spacing within this process.

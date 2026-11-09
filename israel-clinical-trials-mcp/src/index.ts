@@ -34,7 +34,7 @@ const server = new McpServer({
 // ── Tool: search_trials ──
 server.tool(
   "search_trials",
-  "Search clinical trials in Israel by condition, keyword, or intervention. Returns NCT ID, title, status, conditions, sponsor, phases, and key dates.",
+  "Search candidates by condition, keyword or intervention, then verify a listed site country is Israel. RECRUITING checks Israeli site status; unknown local status is reported separately. Returns one upstream page with local counts and continuation, not a total of eligible Israeli trials.",
   searchTrialsSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   async (args) => {
@@ -76,7 +76,7 @@ server.tool(
 // ── Tool: find_trials_by_hospital ──
 server.tool(
   "find_trials_by_hospital",
-  'Find clinical trials at a specific Israeli hospital or institution (e.g. "Sheba", "Hadassah", "Ichilov", "Rambam").',
+  'Find candidates with a matching facility name and country Israel on the same site. RECRUITING checks that matching site; unknown status is separate. Results are locally filtered from one upstream page with a continuation token.',
   findTrialsByHospitalSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   async (args) => {
@@ -103,7 +103,7 @@ server.tool(
 // ── Tool: list_recruiting_trials ──
 server.tool(
   "list_recruiting_trials",
-  "List all currently recruiting clinical trials in Israel, optionally filtered by medical condition. Results sorted by most recently updated.",
+  "List studies with an Israeli site marked RECRUITING, plus a separate section for unknown local status. Optionally filter by condition. Reads one upstream page, most recently updated first, and exposes page counts and continuation; this is not a complete national list.",
   listRecruitingTrialsSchema.shape,
   { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   async (args) => {

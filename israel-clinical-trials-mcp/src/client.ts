@@ -4,17 +4,19 @@
 
 const BASE_URL = "https://clinicaltrials.gov/api/v2";
 
-// Simple rate limiter: max 5 requests per second
+// Serialize admission so concurrent callers cannot share the same launch slot.
 let lastRequestTime = 0;
+let admission = Promise.resolve();
 const MIN_INTERVAL_MS = 200; // 1000ms / 5 = 200ms between requests
 
-async function rateLimit(): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < MIN_INTERVAL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, MIN_INTERVAL_MS - elapsed));
-  }
-  lastRequestTime = Date.now();
+function rateLimit(): Promise<void> {
+  const slot = admission.then(async () => {
+    const wait = MIN_INTERVAL_MS - (Date.now() - lastRequestTime);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestTime = Date.now();
+  });
+  admission = slot.catch(() => {});
+  return slot;
 }
 
 // ── Type definitions for the ClinicalTrials.gov v2 API response ──
@@ -22,6 +24,7 @@ async function rateLimit(): Promise<void> {
 export interface StudyResponse {
   studies: Study[];
   nextPageToken?: string;
+  totalCount?: number;
 }
 
 export interface Study {
@@ -154,6 +157,7 @@ export interface SearchParams {
   facility?: string;
   limit?: number;
   sort?: string;
+  pageToken?: string;
 }
 
 export async function searchStudies(params: SearchParams): Promise<StudyResponse> {
@@ -161,7 +165,7 @@ export async function searchStudies(params: SearchParams): Promise<StudyResponse
 
   const url = new URL(`${BASE_URL}/studies`);
 
-  // Always filter to Israel
+  // Location terms are candidate retrieval only; handlers verify site country.
   if (params.facility) {
     url.searchParams.set("query.locn", `${params.facility} Israel`);
   } else {
@@ -177,12 +181,15 @@ export async function searchStudies(params: SearchParams): Promise<StudyResponse
   if (params.intervention) {
     url.searchParams.set("query.intr", params.intervention);
   }
-  if (params.status) {
+  // Recruitment in Israel is a site-level check, not worldwide study status.
+  if (params.status && params.status !== "RECRUITING") {
     url.searchParams.set("filter.overallStatus", params.status);
   }
 
   const limit = Math.min(params.limit ?? 10, 50);
   url.searchParams.set("pageSize", String(limit));
+  url.searchParams.set("countTotal", "true");
+  if (params.pageToken) url.searchParams.set("pageToken", params.pageToken);
 
   if (params.sort) {
     url.searchParams.set("sort", params.sort);
