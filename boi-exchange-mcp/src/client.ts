@@ -11,43 +11,115 @@ interface ExchangeRateEntry {
   currency: string;
   date: string;
   rate: number;
+  quotedRate: number;
+  quotedPer: number;
+  unitMultiplier: number;
   dataType: string;
 }
 
-function parseCSV(csv: string): ExchangeRateEntry[] {
-  const lines = csv.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
+function validDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
 
-  const header = lines[0].split(",").map((h) => h.trim());
+function parseCSV(csv: string): ExchangeRateEntry[] {
+  // SDMX comments can contain commas, quotes and newlines.
+  const rows: string[][] = [];
+  let row: string[] = [], field = "", quoted = false, closedQuote = false;
+  const input = csv.replace(/^\uFEFF/, "");
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (quoted) {
+      if (char === '"' && input[i + 1] === '"') { field += '"'; i++; }
+      else if (char === '"') { quoted = false; closedQuote = true; }
+      else field += char;
+    } else if (char === '"' && field === "" && !closedQuote) {
+      quoted = true;
+    } else if (char === "," || char === "\n" || char === "\r") {
+      row.push(field.trim()); field = ""; closedQuote = false;
+      if (char !== ",") {
+        if (row.some((value) => value !== "")) rows.push(row);
+        row = [];
+        if (char === "\r" && input[i + 1] === "\n") i++;
+      }
+    } else {
+      if (char === '"' || (closedQuote && !/\s/.test(char))) {
+        throw new Error("Malformed CSV quoting from BOI API");
+      }
+      field += char;
+    }
+  }
+  if (quoted) throw new Error("Unterminated CSV field from BOI API");
+  row.push(field.trim());
+  if (row.some((value) => value !== "")) rows.push(row);
+  if (rows.length === 0) return [];
+
+  const header = rows[0];
+  const required = ["SERIES_CODE", "BASE_CURRENCY", "TIME_PERIOD", "OBS_VALUE",
+    "DATA_TYPE", "UNIT_MULT", "COUNTER_CURRENCY", "UNIT_MEASURE"];
+  if (required.some((name) => header.filter((column) => column === name).length !== 1)) {
+    throw new Error("BOI CSV has missing or duplicate required metadata columns");
+  }
   const seriesIdx = header.indexOf("SERIES_CODE");
   const currencyIdx = header.indexOf("BASE_CURRENCY");
   const dateIdx = header.indexOf("TIME_PERIOD");
   const valueIdx = header.indexOf("OBS_VALUE");
   const dataTypeIdx = header.indexOf("DATA_TYPE");
+  const multiplierIdx = header.indexOf("UNIT_MULT");
+  const counterIdx = header.indexOf("COUNTER_CURRENCY");
+  const measureIdx = header.indexOf("UNIT_MEASURE");
 
-  if (seriesIdx === -1 || dateIdx === -1 || valueIdx === -1) {
+  if ([seriesIdx, currencyIdx, dateIdx, valueIdx, dataTypeIdx, multiplierIdx, counterIdx, measureIdx].includes(-1)) {
     throw new Error(
-      "Unexpected CSV format from BOI API. Expected columns: SERIES_CODE, TIME_PERIOD, OBS_VALUE"
+      "BOI CSV is missing required exchange-rate or quote-unit metadata; conversion refused"
     );
   }
 
   const entries: ExchangeRateEntry[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",").map((c) => c.trim());
-    if (cols.length <= Math.max(seriesIdx, dateIdx, valueIdx)) continue;
-
-    const rate = parseFloat(cols[valueIdx]);
-    if (isNaN(rate) || rate === 0) continue;
+  for (let i = 1; i < rows.length; i++) {
+    const cols = rows[i];
+    if (cols.length !== header.length) throw new Error("Incomplete BOI CSV row");
+    if (cols[dataTypeIdx] !== "OF00") continue;
+    // An empty observation is not a published rate; malformed numbers are errors.
+    if (cols[valueIdx] === "") continue;
+    const quotedRate = Number(cols[valueIdx]);
+    const unitMultiplier = Number(cols[multiplierIdx]);
+    if (cols[counterIdx] !== "ILS" || cols[measureIdx] !== "ILS" ||
+        !/^[A-Z]{3}$/.test(cols[currencyIdx]) || !cols[seriesIdx] ||
+        !validDate(cols[dateIdx]) ||
+        !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(cols[valueIdx]) ||
+        !/^-?\d+$/.test(cols[multiplierIdx]) || !Number.isSafeInteger(unitMultiplier) ||
+        !Number.isFinite(quotedRate) || quotedRate <= 0) {
+      throw new Error("Invalid BOI representative-rate value or quote-unit metadata");
+    }
+    const quotedPer = 10 ** unitMultiplier;
+    const rate = quotedRate / quotedPer;
+    if (!Number.isFinite(quotedPer) || quotedPer <= 0 || !Number.isFinite(rate) || rate <= 0) {
+      throw new Error("Unsupported BOI quote multiplier; conversion refused");
+    }
 
     entries.push({
       seriesCode: cols[seriesIdx],
-      currency: currencyIdx !== -1 ? cols[currencyIdx] : "",
+      currency: cols[currencyIdx],
       date: cols[dateIdx],
       rate,
-      dataType: dataTypeIdx !== -1 ? cols[dataTypeIdx] : "",
+      quotedRate,
+      quotedPer,
+      unitMultiplier,
+      dataType: cols[dataTypeIdx],
     });
   }
 
+  return entries;
+}
+
+function checkedEntries(csv: string, startDate: string, endDate: string, currency?: string): ExchangeRateEntry[] {
+  const entries = parseCSV(csv);
+  if (entries.some((entry) => entry.date < startDate || entry.date > endDate ||
+      (currency !== undefined && entry.currency !== currency.toUpperCase()))) {
+    throw new Error("BOI response does not match the requested currency/date range");
+  }
   return entries;
 }
 
@@ -77,17 +149,18 @@ function buildURL(params: {
 }
 
 let lastRequestTime = 0;
+let admission: Promise<void> = Promise.resolve();
 const MIN_REQUEST_INTERVAL_MS = 300;
 
 async function fetchBOI(url: string): Promise<string> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-    await new Promise((resolve) =>
-      setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed)
-    );
-  }
-  lastRequestTime = Date.now();
+  // Serialize admission, not just timestamp reads, including after timer delays.
+  const slot = admission.then(async () => {
+    const wait = MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestTime);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastRequestTime = Date.now();
+  });
+  admission = slot.catch(() => undefined);
+  await slot;
 
   const response = await fetch(url, {
     headers: { Accept: "text/csv" },
@@ -127,7 +200,7 @@ export async function getLatestRate(
   });
 
   const csv = await fetchBOI(url);
-  const entries = parseCSV(csv).filter((e) => e.dataType === "OF00");
+  const entries = checkedEntries(csv, formatDate(start), formatDate(end), currency);
 
   if (entries.length === 0) {
     throw new Error(
@@ -152,11 +225,11 @@ export async function getHistoricalRates(
   });
 
   const csv = await fetchBOI(url);
-  const entries = parseCSV(csv).filter((e) => e.dataType === "OF00");
+  const entries = checkedEntries(csv, startDate, endDate, currency);
 
   if (entries.length === 0) {
     throw new Error(
-      `No rates found for ${currency.toUpperCase()}/ILS between ${startDate} and ${endDate}. The BOI publishes rates on business days only (Sunday-Thursday).`
+      `No published representative rates found for ${currency.toUpperCase()}/ILS between ${startDate} and ${endDate}. Publication depends on foreign-exchange business days and holidays.`
     );
   }
 
@@ -176,7 +249,7 @@ export async function listAvailableCurrencies(): Promise<string[]> {
   });
 
   const csv = await fetchBOI(url);
-  const entries = parseCSV(csv).filter((e) => e.dataType === "OF00");
+  const entries = checkedEntries(csv, formatDate(start), formatDate(end));
 
   const currencies = new Set<string>();
   for (const entry of entries) {
